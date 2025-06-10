@@ -23,149 +23,110 @@ using namespace std;
 
 void send_packet(pcap_t* handle, Packet* pkt, Host_info& host)
 {
-    // 포트폴리오 미사용 변수 경고 방지
-    (void)host.ip;
-
-    const int eth_len = sizeof(EthHdr);
-    const int ip_len  = sizeof(IpHdr);
-    const int tcp_len = sizeof(TcpHdr);
+    // 1) lengths
+    const int eth_len  = sizeof(EthHdr);
+    const int ip_len   = sizeof(IpHdr);
+    const int tcp_len  = sizeof(TcpHdr);
+    // payload_len = 0 인 RST-only 패킷
     const int packet_len = eth_len + ip_len + tcp_len;
 
-    const int total_len   = ntohs(pkt->ip.total_length);
-    const int payload_len = total_len - pkt->ip_header_len - pkt->tcp_header_len;
-
+    // 2) original seq/ack 계산
+    int total_len   = ntohs(pkt->ip.total_length);
+    int payload_len = total_len - pkt->ip_header_len - pkt->tcp_header_len;
     uint32_t orig_seq = ntohl(pkt->tcp.th_seq);
     uint32_t orig_ack = ntohl(pkt->tcp.th_ack);
 
-    // IP 체크섬 계산용 람다
+    // 3) IP checksum lambda
     auto ip_checksum = [](const IpHdr* iph)->uint16_t {
-        const uint16_t* ptr = reinterpret_cast<const uint16_t*>(iph);
+        const uint16_t* ptr = (const uint16_t*)iph;
         uint32_t sum = 0;
         for (int i = 0; i < sizeof(IpHdr)/2; ++i) {
             sum += ntohs(ptr[i]);
             if (sum > 0xFFFF) sum = (sum & 0xFFFF) + 1;
         }
-        return htons(static_cast<uint16_t>(~sum & 0xFFFF));
+        return htons(~sum & 0xFFFF);
     };
 
-    // TCP 체크섬 계산용 람다
-    auto tcp_checksum = [](const uint8_t* buf, int len)->uint16_t {
-        const uint16_t* ptr = reinterpret_cast<const uint16_t*>(buf);
+    // 4) TCP checksum lambda
+    auto tcp_checksum = [&](const IpHdr& iph, const TcpHdr& th)->uint16_t {
+        struct Pseudo {
+            uint32_t src, dst;
+            uint8_t  zero, proto;
+            uint16_t len;
+        } psh;
+        psh.src   = iph.sip_;
+        psh.dst   = iph.dip_;
+        psh.zero  = 0;
+        psh.proto = IpHdr::TCP;
+        psh.len   = htons(tcp_len);
+        int buflen = sizeof(psh) + tcp_len;
+        uint8_t* buf = (uint8_t*)malloc(buflen);
+        memcpy(buf, &psh, sizeof(psh));
+        memcpy(buf + sizeof(psh), &th, tcp_len);
         uint32_t sum = 0;
-        for (int i = 0; i < len/2; ++i) {
-            sum += ntohs(ptr[i]);
+        uint16_t* w = (uint16_t*)buf;
+        for (int i = 0; i < buflen/2; ++i) {
+            sum += ntohs(w[i]);
             if (sum > 0xFFFF) sum = (sum & 0xFFFF) + 1;
         }
-        if (len & 1) {
-            sum += (buf[len-1] << 8) & 0xFF00;
+        if (buflen & 1) {
+            sum += (buf[buflen-1] << 8) & 0xFF00;
             if (sum > 0xFFFF) sum = (sum & 0xFFFF) + 1;
         }
-        return htons(static_cast<uint16_t>(~sum & 0xFFFF));
+        free(buf);
+        return htons(~sum & 0xFFFF);
     };
 
-    // 의사 헤더 (pseudo header) 구조체
-    struct PseudoHdr {
-        uint32_t src_addr;
-        uint32_t dst_addr;
-        uint8_t  zero;
-        uint8_t  protocol;
-        uint16_t tcp_len;
-    };
-
-    // --- 1) Forward: client -> server (RST|ACK) ---
-    EthHdr  fe = pkt->eth;
+    // --- prepare common headers ---
+    EthHdr fe = pkt->eth;
     fe.smac_ = host.mac;
-    // fe.dmac_ == pkt->eth.dmac_ (서버 MAC)
 
-    IpHdr   fi = pkt->ip;
-    fi.total_length = htons(static_cast<uint16_t>(ip_len + tcp_len));
-    fi.checksum = 0;
-    fi.checksum = ip_checksum(&fi);
+    IpHdr fi = pkt->ip;
+    fi.total_length = htons(ip_len + tcp_len);
+    fi.checksum     = 0;
+    fi.checksum     = ip_checksum(&fi);
 
-    TcpHdr  ft = pkt->tcp;
-    ft.th_flags = static_cast<uint8_t>(TcpHdr::RST) | static_cast<uint8_t>(TcpHdr::ACK);
-    ft.th_off   = tcp_len / 4;
-    ft.th_sum   = 0;
-    ft.th_seq   = htonl(orig_ack);
-    ft.th_ack   = htonl(orig_seq + payload_len);
+    TcpHdr th = pkt->tcp;
+    th.th_flags = static_cast<uint8_t>(TcpHdr::RST) | static_cast<uint8_t>(TcpHdr::ACK);
+    th.th_off   = tcp_len/4;
+    th.th_seq   = htonl(orig_ack);
+    th.th_ack   = htonl(orig_seq + payload_len);
+    th.th_sum   = 0;
+    th.th_sum   = tcp_checksum(fi, th);
 
-    // forward TCP 체크섬 계산
-    PseudoHdr psh {
-        fi.sip_, fi.dip_, 0, IpHdr::TCP, htons(static_cast<uint16_t>(tcp_len))
-    };
-    int buf_len = sizeof(psh) + tcp_len;
-    uint8_t* buf = static_cast<uint8_t*>(malloc(buf_len));
-    memcpy(buf, &psh, sizeof(psh));
-    memcpy(buf + sizeof(psh), &ft, tcp_len);
-    ft.th_sum = tcp_checksum(buf, buf_len);
-    free(buf);
+    // copy into one frame buffer
+    auto frame = (uint8_t*)malloc(packet_len);
+    memcpy(frame,                     &fe, eth_len);
+    memcpy(frame + eth_len,           &fi, ip_len);
+    memcpy(frame + eth_len + ip_len,  &th, tcp_len);
 
-    {
-        uint8_t* frame = static_cast<uint8_t*>(malloc(packet_len));
-        memcpy(frame, &fe, eth_len);
-        memcpy(frame + eth_len, &fi, ip_len);
-        memcpy(frame + eth_len + ip_len, &ft, tcp_len);
-        if (pcap_sendpacket(handle, reinterpret_cast<const u_char*>(frame), packet_len) != 0) {
-            fprintf(stderr, "pcap_sendpacket (forward) failed: %s\n", pcap_geterr(handle));
-        }
-        free(frame);
+    // --- 1) forward via pcap ---
+    if (pcap_sendpacket(handle, frame, packet_len) != 0) {
+        fprintf(stderr, "pcap_sendpacket failed: %s\n", pcap_geterr(handle));
     }
 
-    // --- 2) Backward: server -> client (RST|ACK) ---
-    EthHdr  be = pkt->eth;
-    be.dmac_ = pkt->eth.smac_;  // 원래 client MAC
-    be.smac_ = host.mac;        // 우리 MAC
-
-    IpHdr   bi = pkt->ip;
-    bi.sip_ = pkt->ip.dip_;     // 서버 IP
-    bi.dip_ = pkt->ip.sip_;     // 클라이언트 IP
-    bi.ttl  = 128;
-    bi.total_length = htons(static_cast<uint16_t>(ip_len + tcp_len));
-    bi.checksum = 0;
-    bi.checksum = ip_checksum(&bi);
-
-    TcpHdr  bt = pkt->tcp;
-    bt.th_sport = pkt->tcp.th_dport;
-    bt.th_dport = pkt->tcp.th_sport;
-    bt.th_flags = static_cast<uint8_t>(TcpHdr::RST) | static_cast<uint8_t>(TcpHdr::ACK);
-    bt.th_off   = tcp_len / 4;
-    bt.th_sum   = 0;
-    bt.th_seq   = htonl(orig_ack);
-    bt.th_ack   = htonl(orig_seq + payload_len);
-
-    // backward 체크섬 계산 (생략)
-
-    // Ethernet+IP+TCP 전체 프레임을 담을 새 버퍼
-    uint8_t* frame2 = static_cast<uint8_t*>(malloc(packet_len));
-    memcpy(frame2,                    &be, eth_len);
-    memcpy(frame2 + eth_len,          &bi, ip_len);
-    memcpy(frame2 + eth_len + ip_len, &bt, tcp_len);
-
-    // RAW socket 으로 IP+TCP 헤더만 전송
-    int sockfd = socket(AF_INET, SOCK_RAW, IPPROTO_RAW);
-    if (sockfd < 0) {
-        perror("RAW socket create fail");
-        free(frame2);
-        return;
+    // --- 2) backward via RAW socket ---
+    int sock = socket(AF_INET, SOCK_RAW, IPPROTO_TCP);
+    if (sock >= 0) {
+        int one = 1;
+        setsockopt(sock, IPPROTO_IP, IP_HDRINCL, &one, sizeof(one));
+        struct sockaddr_in dst{};
+        dst.sin_family      = AF_INET;
+        dst.sin_port        = th.th_dport;     // already network‐order
+        dst.sin_addr.s_addr = fi.dip_;         // network‐order
+        // skip Ethernet header
+        sendto(sock,
+               frame + eth_len,
+               packet_len - eth_len,
+               0,
+               (struct sockaddr*)&dst,
+               sizeof(dst));
+        close(sock);
+    } else {
+        perror("RAW socket");
     }
-    int one = 1;
-    setsockopt(sockfd, IPPROTO_IP, IP_HDRINCL, &one, sizeof(one));
 
-    struct sockaddr_in dst{};
-    dst.sin_family      = AF_INET;
-    dst.sin_port        = bt.th_dport;      // network byte order
-    dst.sin_addr.s_addr = bi.dip_;         // network byte order
-
-    const uint8_t* raw = frame2 + eth_len;
-    int raw_len        = packet_len - eth_len;
-    if (sendto(sockfd, raw, raw_len, 0,
-               reinterpret_cast<struct sockaddr*>(&dst),
-               sizeof(dst)) < 0)
-    {
-        perror("sendto fail");
-    }
-    close(sockfd);
-    free(frame2);
+    free(frame);
 }
 
 bool pkt_parse(const uint8_t* pktbuf, string &target_server, pcap_t* pcap, string iface, Host_info& host)
