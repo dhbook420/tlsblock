@@ -31,6 +31,12 @@ void send_packet(pcap_t* handle, Packet* pkt, Host_info& host)
     const int tcp_len = sizeof(TcpHdr);
     const int packet_len = eth_len + ip_len + tcp_len;
 
+    const int total_len   = ntohs(pkt->ip.total_length);
+    const int payload_len = total_len - ip_len - tcp_len;
+
+    uint32_t orig_seq = ntohl(pkt->tcp.th_seq);
+    uint32_t orig_ack = ntohl(pkt->tcp.th_ack);
+
     // IP 체크섬 계산용 람다
     auto ip_checksum = [](const IpHdr* iph)->uint16_t {
         const uint16_t* ptr = reinterpret_cast<const uint16_t*>(iph);
@@ -80,6 +86,8 @@ void send_packet(pcap_t* handle, Packet* pkt, Host_info& host)
     ft.th_flags = static_cast<uint8_t>(TcpHdr::RST) | static_cast<uint8_t>(TcpHdr::ACK);
     ft.th_off   = tcp_len / 4;
     ft.th_sum   = 0;
+    ft.th_seq   = htonl(orig_ack);
+    ft.th_ack   = htonl(orig_seq + payload_len);
 
     // forward TCP 체크섬 계산
     PseudoHdr psh {
@@ -122,6 +130,8 @@ void send_packet(pcap_t* handle, Packet* pkt, Host_info& host)
     bt.th_flags = static_cast<uint8_t>(TcpHdr::RST) | static_cast<uint8_t>(TcpHdr::ACK);
     bt.th_off   = tcp_len / 4;
     bt.th_sum   = 0;
+    bt.th_seq   = htonl(orig_ack);
+    bt.th_ack   = htonl(orig_seq + payload_len);
 
     // backward TCP 체크섬 계산
     psh = PseudoHdr{ bi.sip_, bi.dip_, 0, IpHdr::TCP, htons(static_cast<uint16_t>(tcp_len)) };
@@ -255,7 +265,7 @@ bool pkt_parse(const uint8_t* pktbuf, string &target_server, pcap_t* pcap, strin
 
         string tls_server(reinterpret_cast<const char*>(payload2), name_len);
         if (tls_server.find(target_server) != string::npos) {
-            cout << "found" <<endl;
+            cout << "found in " << tls_server <<endl;
             send_packet(pcap, &pkt_hdrs, host);
             break;
         }
