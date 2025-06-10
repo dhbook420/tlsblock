@@ -21,6 +21,8 @@ struct Packet{
     EthHdr eth;
     IpHdr ip;
     TcpHdr tcp;
+    int     ip_header_len;
+    int     tcp_header_len;
 };
 
 struct Host_info{
