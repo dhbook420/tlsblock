@@ -23,20 +23,17 @@ using namespace std;
 
 void send_packet(pcap_t* handle, Packet* pkt, Host_info& host)
 {
-    // 1) lengths
     const int eth_len  = sizeof(EthHdr);
     const int ip_len   = sizeof(IpHdr);
     const int tcp_len  = sizeof(TcpHdr);
-    // payload_len = 0 인 RST-only 패킷
     const int packet_len = eth_len + ip_len + tcp_len;
 
-    // 2) original seq/ack 계산
+
     int total_len   = ntohs(pkt->ip.total_length);
     int payload_len = total_len - pkt->ip_header_len - pkt->tcp_header_len;
     uint32_t orig_seq = ntohl(pkt->tcp.th_seq);
     uint32_t orig_ack = ntohl(pkt->tcp.th_ack);
 
-    // 3) IP checksum lambda
     auto ip_checksum = [](const IpHdr* iph)->uint16_t {
         const uint16_t* ptr = (const uint16_t*)iph;
         uint32_t sum = 0;
@@ -47,7 +44,6 @@ void send_packet(pcap_t* handle, Packet* pkt, Host_info& host)
         return htons(~sum & 0xFFFF);
     };
 
-    // 4) TCP checksum lambda
     auto tcp_checksum = [&](const IpHdr& iph, const TcpHdr& th)->uint16_t {
         struct Pseudo {
             uint32_t src, dst;
@@ -77,7 +73,6 @@ void send_packet(pcap_t* handle, Packet* pkt, Host_info& host)
         return htons(~sum & 0xFFFF);
     };
 
-    // --- prepare common headers ---
     EthHdr fe = pkt->eth;
     fe.smac_ = host.mac;
 
@@ -94,18 +89,15 @@ void send_packet(pcap_t* handle, Packet* pkt, Host_info& host)
     th.th_sum   = 0;
     th.th_sum   = tcp_checksum(fi, th);
 
-    // copy into one frame buffer
     auto frame = (uint8_t*)malloc(packet_len);
     memcpy(frame,                     &fe, eth_len);
     memcpy(frame + eth_len,           &fi, ip_len);
     memcpy(frame + eth_len + ip_len,  &th, tcp_len);
 
-    // --- 1) forward via pcap ---
     if (pcap_sendpacket(handle, frame, packet_len) != 0) {
         fprintf(stderr, "pcap_sendpacket failed: %s\n", pcap_geterr(handle));
     }
 
-    // --- 2) backward via RAW socket ---
     int sock = socket(AF_INET, SOCK_RAW, IPPROTO_TCP);
     if (sock >= 0) {
         int one = 1;
