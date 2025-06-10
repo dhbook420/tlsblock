@@ -233,6 +233,8 @@ bool pkt_parse(const uint8_t* pktbuf, string &target_server, pcap_t* pcap, strin
     while (extension_type != 0x0000){
       extension_type = ntohs(*(uint16_t*)(payload2));
       extension_len = ntohs(*(uint16_t*)(payload2 + 2));
+      if (extension_type == 0x0000)
+        break;
       payload2 = payload2 + 4 + extension_len;
     }
 
