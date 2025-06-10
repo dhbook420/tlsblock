@@ -133,25 +133,39 @@ void send_packet(pcap_t* handle, Packet* pkt, Host_info& host)
     bt.th_seq   = htonl(orig_ack);
     bt.th_ack   = htonl(orig_seq + payload_len);
 
-    // backward TCP 체크섬 계산
-    psh = PseudoHdr{ bi.sip_, bi.dip_, 0, IpHdr::TCP, htons(static_cast<uint16_t>(tcp_len)) };
-    buf_len = sizeof(psh) + tcp_len;
-    buf = static_cast<uint8_t*>(malloc(buf_len));
-    memcpy(buf, &psh, sizeof(psh));
-    memcpy(buf + sizeof(psh), &bt, tcp_len);
-    bt.th_sum = tcp_checksum(buf, buf_len);
-    free(buf);
+    // backward 체크섬 계산 (생략)
 
-    {
-        uint8_t* frame = static_cast<uint8_t*>(malloc(packet_len));
-        memcpy(frame, &be, eth_len);
-        memcpy(frame + eth_len, &bi, ip_len);
-        memcpy(frame + eth_len + ip_len, &bt, tcp_len);
-        if (pcap_sendpacket(handle, reinterpret_cast<const u_char*>(frame), packet_len) != 0) {
-            fprintf(stderr, "pcap_sendpacket (backward) failed: %s\n", pcap_geterr(handle));
-        }
-        free(frame);
+    // Ethernet+IP+TCP 전체 프레임을 담을 새 버퍼
+    uint8_t* frame2 = static_cast<uint8_t*>(malloc(packet_len));
+    memcpy(frame2,                    &be, eth_len);
+    memcpy(frame2 + eth_len,          &bi, ip_len);
+    memcpy(frame2 + eth_len + ip_len, &bt, tcp_len);
+
+    // RAW socket 으로 IP+TCP 헤더만 전송
+    int sockfd = socket(AF_INET, SOCK_RAW, IPPROTO_RAW);
+    if (sockfd < 0) {
+        perror("RAW socket create fail");
+        free(frame2);
+        return;
     }
+    int one = 1;
+    setsockopt(sockfd, IPPROTO_IP, IP_HDRINCL, &one, sizeof(one));
+
+    struct sockaddr_in dst{};
+    dst.sin_family      = AF_INET;
+    dst.sin_port        = bt.th_dport;      // network byte order
+    dst.sin_addr.s_addr = bi.dip_;         // network byte order
+
+    const uint8_t* raw = frame2 + eth_len;
+    int raw_len        = packet_len - eth_len;
+    if (sendto(sockfd, raw, raw_len, 0,
+               reinterpret_cast<struct sockaddr*>(&dst),
+               sizeof(dst)) < 0)
+    {
+        perror("sendto fail");
+    }
+    close(sockfd);
+    free(frame2);
 }
 
 bool pkt_parse(const uint8_t* pktbuf, string &target_server, pcap_t* pcap, string iface, Host_info& host)
