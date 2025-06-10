@@ -4,14 +4,15 @@
 
 #pragma pack(push, 1)
 
-struct tls final
+struct Tls final
 {
     uint8_t tls_content;
     uint16_t tls_version;
     uint16_t tls_length;
     //5
 
-    uint32_t handshake_type_length;
+    uint8_t handshake_type;
+    uint8_t handshake_length[3];
     //9
     uint16_t protocol_version;
     //11

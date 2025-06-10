@@ -7,6 +7,7 @@
 
 #include "ethhdr.h"
 #include "iphdr.h"
+#include "tlshdr.h"
 #include "mac.h"
 
 #include <iostream>
@@ -15,6 +16,17 @@
 #include <algorithm>
 #include <pcap.h>
 
-bool pkt_parse(const uint8_t* pkt, string &host, pcap_t* pcap, string iface, host_info& host);
-void send_packet(const string& iface,pcap_t* handle, const EthHdr* eth,const IpHdr* ip,
-                 const TcpHdr* tcp,const char* payload,int recv_len,bool  is_forward);
+using namespace std;
+struct Packet{
+    EthHdr eth;
+    IpHdr ip;
+    TcpHdr tcp;
+};
+
+struct Host_info{
+    Mac mac;
+    Ip ip;
+};
+
+bool pkt_parse(const uint8_t* pktbuf, string &target_server, pcap_t* pcap, string iface, Host_info& host);
+void send_packet(pcap_t* handle, Packet* pkt, Host_info& host);
