@@ -199,7 +199,6 @@ bool pkt_parse(const uint8_t* pktbuf, string &target_server, pcap_t* pcap, strin
     const Tls* tls_pkt = reinterpret_cast<const Tls*>(payload);
 
 
-    cout << "starting parsing tls" <<endl;
     uint8_t content_type = (tls_pkt->tls_content);
     if (content_type != 22) { //0x16, handshake
         return false;
