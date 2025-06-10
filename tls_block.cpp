@@ -60,7 +60,6 @@ int main(int argc, char *argv[]) {
         struct pcap_pkthdr *header;
         const uint8_t* pkt;
         int res = pcap_next_ex(pcap, &header, &pkt);
-        cerr << "pkt grab" << res << endl;
         if (res == 0){
             continue;
         }
@@ -68,7 +67,6 @@ int main(int argc, char *argv[]) {
             cerr << "[pcap] error or break: " << res << endl;
             break;
         }
-        cout << "begin parse" << endl;
         pkt_parse(pkt, server, pcap, iface, host);
 
     }
