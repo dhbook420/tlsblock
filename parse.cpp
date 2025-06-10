@@ -32,7 +32,7 @@ void send_packet(pcap_t* handle, Packet* pkt, Host_info& host)
     const int packet_len = eth_len + ip_len + tcp_len;
 
     const int total_len   = ntohs(pkt->ip.total_length);
-    const int payload_len = total_len - ip_len - tcp_len;
+    const int payload_len = total_len - pkt->ip_header_len - pkt->tcp_header_len;
 
     uint32_t orig_seq = ntohl(pkt->tcp.th_seq);
     uint32_t orig_ack = ntohl(pkt->tcp.th_ack);
@@ -191,6 +191,8 @@ bool pkt_parse(const uint8_t* pktbuf, string &target_server, pcap_t* pcap, strin
     pkt_hdrs.eth = *eth;
     pkt_hdrs.ip = *ip;
     pkt_hdrs.tcp = *tcp;
+    pkt_hdrs.ip_header_len  = ihl * 4;
+    pkt_hdrs.tcp_header_len = data_offset * 4;
 
     const uint8_t* payload = tcp_start + tcp_header_len;
     uint16_t ip_total_len = ntohs(ip->total_length);
