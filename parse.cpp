@@ -211,33 +211,33 @@ bool pkt_parse(const uint8_t* pktbuf, string &target_server, pcap_t* pcap, strin
     cout << "found client hello" <<endl;
     uint8_t session_id_len = (tls_pkt->session_id_length);
 
-    payload = payload + 44 + session_id_len;
+    const uint8_t* payload2 = reinterpret_cast<const uint8_t*>(payload) + 44 + session_id_len;
 
 
-    uint16_t cipher_suites_len = ntohs(*(uint16_t*)(payload));
+    uint16_t cipher_suites_len = ntohs(*(uint16_t*)(payload2));
 
-    payload = payload + 2 + cipher_suites_len;
+    payload2 = payload2 + 2 + cipher_suites_len;
 
-    uint8_t comp_len = *((uint8_t*)(payload));
+    uint8_t comp_len = *((uint8_t*)(payload2));
 
-    payload = payload + 1 + comp_len;
+    payload2 = payload2 + 1 + comp_len;
 
-    uint16_t exten_len = ntohs(*(uint16_t*)(payload));
+    uint16_t exten_len = ntohs(*(uint16_t*)(payload2));
     cout << exten_len <<endl;
 
-    payload = payload + 2 ;
+    payload2 = payload2 + 2 ;
 
     uint16_t extension_type = 0xffff;
     uint16_t extension_len = 0;
 
     while (extension_type != 0x0000){
-      extension_type = ntohs(*(uint16_t*)(payload));
-      extension_len = ntohs(*(uint16_t*)(payload + 1));
-      payload = payload + 2 + extension_len;
+      extension_type = ntohs(*(uint16_t*)(payload2));
+      extension_len = ntohs(*(uint16_t*)(payload2 + 2));
+      payload2 = payload2 + 4 + extension_len;
     }
 
 
-    string tls_server(reinterpret_cast<const char*>(payload), extension_len);
+    string tls_server(reinterpret_cast<const char*>(payload2), extension_len);
     cout << "servername : " << tls_server << endl;
     if (tls_server.find(target_server) != string::npos) {
         send_packet(pcap, &pkt_hdrs, host);
