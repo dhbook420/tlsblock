@@ -7,6 +7,7 @@
 
 #include "ethhdr.h"
 #include "iphdr.h"
+#include "tlshdr.h"
 #include "mac.h"
 #include "ip.h"
 #include "tcphdr.h"
@@ -24,20 +25,9 @@ void usage() {
     cout << "syntax : ./tls-block <interface> <server name>\nsample : tls-block wlan0 naver.com\n";
 }
 
-struct Packet{
-    EthHdr eth;
-    IpHdr ip;
-    TcpHdr tcp;
-};
 
-struct Host_info{
-    Mac mac;
-    Ip ip;
-};
 
 bool getMacIpAddr(string &iface_name, Mac& mac_addr, Ip& ip_addr);
-
-
 
 int main(int argc, char *argv[]) {
     if (argc != 3) {
@@ -49,17 +39,14 @@ int main(int argc, char *argv[]) {
     string server(argv[2]);
     Mac mac;
     Ip ip;
-
+    if (!getMacIpAddr(iface, mac, ip))
+        return EXIT_FAILURE;
     //나의 인터페이스 정보 저장
     Host_info host;
     host.mac = mac;
     host.ip = ip;
 
     char errbuf[PCAP_ERRBUF_SIZE];
-
-    if (!getMacIpAddr(iface, mac, ip))
-        return EXIT_FAILURE;
-
 
     pcap_t* pcap = pcap_open_live(iface.c_str(), 65536, 1, 1, errbuf);
     if (pcap == nullptr) {
@@ -73,13 +60,15 @@ int main(int argc, char *argv[]) {
         struct pcap_pkthdr *header;
         const uint8_t* pkt;
         int res = pcap_next_ex(pcap, &header, &pkt);
+        cerr << "pkt grab" << res << endl;
         if (res == 0){
             continue;
         }
         if (res == PCAP_ERROR || res == PCAP_ERROR_BREAK){
+            cerr << "[pcap] error or break: " << res << endl;
             break;
         }
-
+        cout << "begin parse" << endl;
         pkt_parse(pkt, server, pcap, iface, host);
 
     }
