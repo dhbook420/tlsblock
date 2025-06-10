@@ -239,11 +239,32 @@ bool pkt_parse(const uint8_t* pktbuf, string &target_server, pcap_t* pcap, strin
     }
 
 
-    string tls_server(reinterpret_cast<const char*>(payload2), extension_len);
-    cout << "servername : " << tls_server << endl;
-    if (tls_server.find(target_server) != string::npos) {
-        send_packet(pcap, &pkt_hdrs, host);
+
+    payload2 += 4;
+    uint16_t list_len = ntohs(*(uint16_t*)(payload2));
+
+    payload2 += 2;
+    const uint8_t* list_end = payload2 + list_len;
+
+    while (payload2 + 3 <= list_end) {
+        uint8_t name_type = *payload2;
+
+        payload += 1;
+
+        uint16_t name_len = ntohs(*(uint16_t*)(payload2));
+        payload2 += 2;
+
+        string tls_server(reinterpret_cast<const char*>(payload2), name_len);
+        cout << "servername: " << tls_server << endl;
+
+        if (tls_server.find(target_server) != string::npos) {
+            send_packet(pcap, &pkt_hdrs, host);
+        }
+
+        payload2 += name_len;
     }
+
+
 
 
     return false;
