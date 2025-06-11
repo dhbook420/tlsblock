@@ -160,6 +160,8 @@ bool pkt_parse(const uint8_t* pktbuf, string &target_server, pcap_t* pcap, strin
     uint16_t eth_type = eth->type();
 
     if (eth_type != EthHdr::Ip4) {
+        segment_len = 0;
+        expected_tls_total = 0;
         return false;
     }
 
@@ -170,6 +172,8 @@ bool pkt_parse(const uint8_t* pktbuf, string &target_server, pcap_t* pcap, strin
     size_t ip_header_len = static_cast<size_t>(ihl) * 4;
 
     if ((ip_header_len < 20) || (ip->protocol != IpHdr::TCP) ) {
+        segment_len = 0;
+        expected_tls_total = 0;
         return false;
     }
 
@@ -180,6 +184,8 @@ bool pkt_parse(const uint8_t* pktbuf, string &target_server, pcap_t* pcap, strin
     size_t tcp_header_len = static_cast<size_t>(data_offset) * 4;
 
     if (tcp_header_len < 20) {
+        segment_len = 0;
+        expected_tls_total = 0;
         return false;
     }
 
@@ -201,6 +207,8 @@ bool pkt_parse(const uint8_t* pktbuf, string &target_server, pcap_t* pcap, strin
     }
 
     if (payload_len == 0) {
+        segment_len = 0;
+        expected_tls_total = 0;
         return false;
     }
 
@@ -209,10 +217,14 @@ bool pkt_parse(const uint8_t* pktbuf, string &target_server, pcap_t* pcap, strin
 
         uint8_t content_type = (tls_pkt->tls_content);
         if (content_type != 22) { //0x16, handshake
+            segment_len = 0;
+            expected_tls_total = 0;
             return false;
         }
         uint8_t hs_type = ((tls_pkt->handshake_type));
         if (hs_type != 1) { //0x1, client hello
+            segment_len = 0;
+            expected_tls_total = 0;
             return false;
         }
 
