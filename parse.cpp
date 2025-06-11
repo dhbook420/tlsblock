@@ -242,12 +242,20 @@ bool pkt_parse(const uint8_t* pktbuf, string &target_server, pcap_t* pcap, strin
     }
     else {
 
-        if (segment_len + payload_len >= sizeof(segment_payload)) {
+        if (segment_len + payload_len > sizeof(segment_payload)) {
             cerr << "segment overflow" << endl;
             segment_len = 0;
             expected_tls_total = 0;
             return false;
         }
+
+        //같은 flow에 속하는 패킷을 탐지
+        if(pkt_hdrs.ip.sip_ != segment_hdrs.ip.sip_
+            || pkt_hdrs.ip.dip_ != segment_hdrs.ip.dip_
+            || pkt_hdrs.tcp.th_sport != segment_hdrs.tcp.th_sport
+            || pkt_hdrs.tcp.th_dport != segment_hdrs.tcp.th_dport) {
+          return false;
+            }
 
         memcpy(segment_payload + segment_len, payload, payload_len);
         segment_len += payload_len;
