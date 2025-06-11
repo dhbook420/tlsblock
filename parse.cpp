@@ -279,7 +279,7 @@ bool pkt_parse(const uint8_t* pktbuf, string &target_server, pcap_t* pcap, strin
 
 
 
-    cout << "found client hello" <<endl;
+    //cout << "found client hello" <<endl;
     uint8_t session_id_len = (tls_pkt->session_id_length);
 
     const uint8_t* payload2 = reinterpret_cast<const uint8_t*>(payload) + 44 + session_id_len;
@@ -293,7 +293,7 @@ bool pkt_parse(const uint8_t* pktbuf, string &target_server, pcap_t* pcap, strin
     payload2 = payload2 + 1 + comp_len;
 
     uint16_t exten_len = ntohs(*(uint16_t*)(payload2));
-    cout << exten_len <<endl;
+    //cout << exten_len <<endl;
 
     payload2 = payload2 + 2 ;
 
@@ -325,7 +325,7 @@ bool pkt_parse(const uint8_t* pktbuf, string &target_server, pcap_t* pcap, strin
 
         string tls_server(reinterpret_cast<const char*>(payload2), name_len);
         if (tls_server.find(target_server) != string::npos) {
-            cout << "found in " << tls_server <<endl;
+            //cout << "found in " << tls_server <<endl;
             send_packet(pcap, &pkt_hdrs, host);
             segment_len = 0;
             break;
