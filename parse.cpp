@@ -28,12 +28,12 @@ void send_packet(pcap_t* handle, Packet* pkt, Host_info& host)
     const int tcp_len  = sizeof(TcpHdr);
     const int packet_len = eth_len + ip_len + tcp_len;
 
-
     int total_len   = ntohs(pkt->ip.total_length);
     int payload_len = total_len - pkt->ip_header_len - pkt->tcp_header_len;
     uint32_t orig_seq = ntohl(pkt->tcp.th_seq);
     uint32_t orig_ack = ntohl(pkt->tcp.th_ack);
 
+    // IP 체크섬 함수
     auto ip_checksum = [](const IpHdr* iph)->uint16_t {
         const uint16_t* ptr = (const uint16_t*)iph;
         uint32_t sum = 0;
@@ -44,6 +44,7 @@ void send_packet(pcap_t* handle, Packet* pkt, Host_info& host)
         return htons(~sum & 0xFFFF);
     };
 
+    // TCP 체크섬 함수
     auto tcp_checksum = [&](const IpHdr& iph, const TcpHdr& th)->uint16_t {
         struct Pseudo {
             uint32_t src, dst;
@@ -73,52 +74,82 @@ void send_packet(pcap_t* handle, Packet* pkt, Host_info& host)
         return htons(~sum & 0xFFFF);
     };
 
-    EthHdr fe = pkt->eth;
-    fe.smac_ = host.mac;
+    // =============================
+    // 정방향 (Client → Server)
+    // =============================
+    {
+        EthHdr fe = pkt->eth;
+        fe.smac_ = host.mac;
 
-    IpHdr fi = pkt->ip;
-    fi.total_length = htons(ip_len + tcp_len);
-    fi.checksum     = 0;
-    fi.checksum     = ip_checksum(&fi);
+        IpHdr fi = pkt->ip;
+        fi.total_length = htons(ip_len + tcp_len);
+        fi.checksum = 0;
+        fi.checksum = ip_checksum(&fi);
 
-    TcpHdr th = pkt->tcp;
-    th.th_flags = static_cast<uint8_t>(TcpHdr::RST) | static_cast<uint8_t>(TcpHdr::ACK);
-    th.th_off   = tcp_len/4;
-    th.th_seq   = htonl(orig_ack);
-    th.th_ack   = htonl(orig_seq + payload_len);
-    th.th_sum   = 0;
-    th.th_sum   = tcp_checksum(fi, th);
+        TcpHdr th = pkt->tcp;
+        th.th_flags = TcpHdr::RST | TcpHdr::ACK;
+        th.th_off   = tcp_len / 4;
+        th.th_seq   = htonl(orig_seq + payload_len); // next seq
+        th.th_ack   = pkt->tcp.th_ack;               // 그대로 유지
+        th.th_sum   = 0;
+        th.th_sum   = tcp_checksum(fi, th);
 
-    auto frame = (uint8_t*)malloc(packet_len);
-    memcpy(frame,                     &fe, eth_len);
-    memcpy(frame + eth_len,           &fi, ip_len);
-    memcpy(frame + eth_len + ip_len,  &th, tcp_len);
+        uint8_t* frame = (uint8_t*)malloc(packet_len);
+        memcpy(frame,                   &fe, eth_len);
+        memcpy(frame + eth_len,        &fi, ip_len);
+        memcpy(frame + eth_len + ip_len, &th, tcp_len);
 
-    if (pcap_sendpacket(handle, frame, packet_len) != 0) {
-        fprintf(stderr, "pcap_sendpacket failed: %s\n", pcap_geterr(handle));
+        if (pcap_sendpacket(handle, frame, packet_len) != 0) {
+            fprintf(stderr, "pcap_sendpacket failed: %s\n", pcap_geterr(handle));
+        }
+
+        free(frame);
     }
 
-    int sock = socket(AF_INET, SOCK_RAW, IPPROTO_TCP);
-    if (sock >= 0) {
+    // =============================
+    // 역방향 (Server → Client)
+    // =============================
+    {
+        IpHdr fi = pkt->ip;
+        std::swap(fi.sip_, fi.dip_);
+        fi.total_length = htons(ip_len + tcp_len);
+        fi.checksum = 0;
+        fi.checksum = ip_checksum(&fi);
+
+        TcpHdr th = pkt->tcp;
+        std::swap(th.th_sport, th.th_dport);
+        th.th_flags = TcpHdr::RST | TcpHdr::ACK;
+        th.th_off   = tcp_len / 4;
+        th.th_seq   = htonl(orig_ack);                     // 서버 seq = 클라이언트가 준 ack
+        th.th_ack   = htonl(orig_seq + payload_len);       // 서버 ack = 클라 seq + len
+        th.th_sum   = 0;
+        th.th_sum   = tcp_checksum(fi, th);
+
+        int sock = socket(AF_INET, SOCK_RAW, IPPROTO_RAW);
+        if (sock < 0) {
+            perror("socket() failed");
+            return;
+        }
+
         int one = 1;
         setsockopt(sock, IPPROTO_IP, IP_HDRINCL, &one, sizeof(one));
-        struct sockaddr_in dst{};
-        dst.sin_family      = AF_INET;
-        dst.sin_port        = th.th_dport;     // already network‐order
-        dst.sin_addr.s_addr = fi.dip_;         // network‐order
-        // skip Ethernet header
-        sendto(sock,
-               frame + eth_len,
-               packet_len - eth_len,
-               0,
-               (struct sockaddr*)&dst,
-               sizeof(dst));
-        close(sock);
-    } else {
-        perror("RAW socket");
-    }
 
-    free(frame);
+        struct sockaddr_in dst{};
+        dst.sin_family = AF_INET;
+        dst.sin_port = th.th_dport;
+        dst.sin_addr.s_addr = fi.dip_;
+
+        uint8_t* ip_tcp = (uint8_t*)malloc(ip_len + tcp_len);
+        memcpy(ip_tcp, &fi, ip_len);
+        memcpy(ip_tcp + ip_len, &th, tcp_len);
+
+        if (sendto(sock, ip_tcp, ip_len + tcp_len, 0, (struct sockaddr*)&dst, sizeof(dst)) < 0) {
+            perror("sendto() failed");
+        }
+
+        close(sock);
+        free(ip_tcp);
+    }
 }
 
 bool pkt_parse(const uint8_t* pktbuf, string &target_server, pcap_t* pcap, string iface, Host_info& host)
