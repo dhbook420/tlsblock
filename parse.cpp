@@ -85,7 +85,7 @@ void send_packet(pcap_t* handle, Packet* pkt, Host_info& host)
         th.th_flags = TcpHdr::RST | TcpHdr::ACK;
         th.th_off   = tcp_len / 4;
         th.th_seq   = htonl(orig_seq + payload_len); // next seq
-        th.th_ack   = pkt->tcp.th_ack;               // 그대로 유지
+        th.th_ack   = pkt->tcp.th_ack;
         th.th_sum   = 0;
         th.th_sum   = tcp_checksum(fi, th);
 
@@ -144,7 +144,6 @@ void send_packet(pcap_t* handle, Packet* pkt, Host_info& host)
     }
 }
 
-//2개로 나뉘어 보내진 경우 첫 segment의 정보들
 static uint8_t segment_payload[65536] = {0,};
 static size_t segment_len = 0;
 static Packet segment_hdrs;
@@ -237,7 +236,7 @@ bool pkt_parse(const uint8_t* pktbuf, string &target_server, pcap_t* pcap, strin
             segment_hdrs = pkt_hdrs;
             return false;
         }
-        //false return 안되면 segmet
+        //false return 안되면 segmet 완성되었다는 뜻
         segment_len = 0;
         expected_tls_total = 0;
     }
