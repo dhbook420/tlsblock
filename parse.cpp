@@ -33,7 +33,6 @@ void send_packet(pcap_t* handle, Packet* pkt, Host_info& host)
     uint32_t orig_seq = ntohl(pkt->tcp.th_seq);
     uint32_t orig_ack = ntohl(pkt->tcp.th_ack);
 
-    // IP 체크섬 함수
     auto ip_checksum = [](const IpHdr* iph)->uint16_t {
         const uint16_t* ptr = (const uint16_t*)iph;
         uint32_t sum = 0;
@@ -44,7 +43,6 @@ void send_packet(pcap_t* handle, Packet* pkt, Host_info& host)
         return htons(~sum & 0xFFFF);
     };
 
-    // TCP 체크섬 함수
     auto tcp_checksum = [&](const IpHdr& iph, const TcpHdr& th)->uint16_t {
         struct Pseudo {
             uint32_t src, dst;
@@ -74,9 +72,6 @@ void send_packet(pcap_t* handle, Packet* pkt, Host_info& host)
         return htons(~sum & 0xFFFF);
     };
 
-    // =============================
-    // 정방향 (Client → Server)
-    // =============================
     {
         EthHdr fe = pkt->eth;
         fe.smac_ = host.mac;
@@ -106,9 +101,6 @@ void send_packet(pcap_t* handle, Packet* pkt, Host_info& host)
         free(frame);
     }
 
-    // =============================
-    // 역방향 (Server → Client)
-    // =============================
     {
         IpHdr fi = pkt->ip;
         std::swap(fi.sip_, fi.dip_);
@@ -152,9 +144,15 @@ void send_packet(pcap_t* handle, Packet* pkt, Host_info& host)
     }
 }
 
+//2개로 나뉘어 보내진 경우 첫 segment의 정보들
+static uint8_t segment_payload[65536] = {0,};
+static size_t segment_len = 0;
+static Packet segment_hdrs;
+static uint16_t expected_tls_total = 0;
+
 bool pkt_parse(const uint8_t* pktbuf, string &target_server, pcap_t* pcap, string iface, Host_info& host)
 {
-    //client hello = ip4,
+    //client hello = ip4
     //ip hdrlen 20
     //tcp flag psh, ack
 
@@ -206,23 +204,63 @@ bool pkt_parse(const uint8_t* pktbuf, string &target_server, pcap_t* pcap, strin
         return false;
     }
 
+    if (!segment_len) {
+        const Tls* tls_pkt = reinterpret_cast<const Tls*>(payload);
+
+        uint8_t content_type = (tls_pkt->tls_content);
+        if (content_type != 22) { //0x16, handshake
+            return false;
+        }
+        uint8_t hs_type = ((tls_pkt->handshake_type));
+        if (hs_type != 1) { //0x1, client hello
+            return false;
+        }
+
+        uint16_t tls_len = ((tls_pkt->tls_length));
+        expected_tls_total = tls_len + 5;
+
+        if (expected_tls_total > payload_len) {
+            memcpy(segment_payload, payload, payload_len);
+            segment_len = payload_len;
+            segment_hdrs = pkt_hdrs;
+            return false;
+        }
+    }
+    else {
+
+        if (segment_len + payload_len >= sizeof(segment_payload)) {
+            cerr << "segment overflow" << endl;
+            segment_len = 0;
+            expected_tls_total = 0;
+            return false;
+        }
+
+        memcpy(segment_payload + segment_len, payload, payload_len);
+        segment_len += payload_len;
+
+        if (segment_len < expected_tls_total) {
+            return false;
+        }
+
+        // 이제 완성 → segment_payload로 파싱
+        payload = segment_payload;
+        payload_len = segment_len;
+        pkt_hdrs = segment_hdrs;
+
+        // 버퍼 초기화 (한 번만 처리)
+        segment_len = 0;
+        expected_tls_total = 0;
+
+    }
+
     const Tls* tls_pkt = reinterpret_cast<const Tls*>(payload);
 
 
-    uint8_t content_type = (tls_pkt->tls_content);
-    if (content_type != 22) { //0x16, handshake
-        return false;
-    }
-    uint8_t hs_type = ((tls_pkt->handshake_type));
-    if (hs_type != 1) { //0x1, client hello
-        return false;
-    }
 
     cout << "found client hello" <<endl;
     uint8_t session_id_len = (tls_pkt->session_id_length);
 
     const uint8_t* payload2 = reinterpret_cast<const uint8_t*>(payload) + 44 + session_id_len;
-
 
     uint16_t cipher_suites_len = ntohs(*(uint16_t*)(payload2));
 
@@ -267,6 +305,7 @@ bool pkt_parse(const uint8_t* pktbuf, string &target_server, pcap_t* pcap, strin
         if (tls_server.find(target_server) != string::npos) {
             cout << "found in " << tls_server <<endl;
             send_packet(pcap, &pkt_hdrs, host);
+            segment_len = 0;
             break;
         }
 
