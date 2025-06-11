@@ -228,7 +228,7 @@ bool pkt_parse(const uint8_t* pktbuf, string &target_server, pcap_t* pcap, strin
             return false;
         }
 
-        uint16_t tls_len = ntohs(*(uint16_t*)(tls_pkt->tls_length));
+        uint16_t tls_len = ntohs((tls_pkt->tls_length));
         expected_tls_total = tls_len + 5;
 
         if (expected_tls_total > payload_len) {
@@ -237,7 +237,7 @@ bool pkt_parse(const uint8_t* pktbuf, string &target_server, pcap_t* pcap, strin
             segment_hdrs = pkt_hdrs;
             return false;
         }
-        //false return 안되면 segment 없다는 뜻
+        //false return 안되면 segmet
         segment_len = 0;
         expected_tls_total = 0;
     }
